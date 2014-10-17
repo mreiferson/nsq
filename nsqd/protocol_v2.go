@@ -761,7 +761,7 @@ func (p *protocolV2) PUB(client *clientV2, params [][]byte) ([]byte, error) {
 	}
 
 	topic := p.ctx.nsqd.GetTopic(topicName)
-	msg := NewMessage(<-p.ctx.nsqd.idChan, messageBody)
+	msg := NewMessage(topic.GenerateID(), messageBody)
 	err = topic.PutMessage(msg)
 	if err != nil {
 		return nil, protocol.NewFatalClientErr(err, "E_PUB_FAILED", "PUB failed "+err.Error())
@@ -783,6 +783,12 @@ func (p *protocolV2) MPUB(client *clientV2, params [][]byte) ([]byte, error) {
 			fmt.Sprintf("E_BAD_TOPIC MPUB topic name %q is not valid", topicName))
 	}
 
+	if err := p.CheckAuth(client, "MPUB", topicName, ""); err != nil {
+		return nil, err
+	}
+
+	topic := p.ctx.nsqd.GetTopic(topicName)
+
 	bodyLen, err := readLen(client.Reader, client.lenSlice)
 	if err != nil {
 		return nil, protocol.NewFatalClientErr(err, "E_BAD_BODY", "MPUB failed to read body size")
@@ -798,17 +804,11 @@ func (p *protocolV2) MPUB(client *clientV2, params [][]byte) ([]byte, error) {
 			fmt.Sprintf("MPUB body too big %d > %d", bodyLen, p.ctx.nsqd.getOpts().MaxBodySize))
 	}
 
-	messages, err := readMPUB(client.Reader, client.lenSlice, p.ctx.nsqd.idChan,
+	messages, err := readMPUB(client.Reader, client.lenSlice, topic,
 		p.ctx.nsqd.getOpts().MaxMsgSize)
 	if err != nil {
 		return nil, err
 	}
-
-	if err := p.CheckAuth(client, "MPUB", topicName, ""); err != nil {
-		return nil, err
-	}
-
-	topic := p.ctx.nsqd.GetTopic(topicName)
 
 	// if we've made it this far we've validated all the input,
 	// the only possible error is that the topic is exiting during
@@ -873,7 +873,7 @@ func (p *protocolV2) DPUB(client *clientV2, params [][]byte) ([]byte, error) {
 	}
 
 	topic := p.ctx.nsqd.GetTopic(topicName)
-	msg := NewMessage(<-p.ctx.nsqd.idChan, messageBody)
+	msg := NewMessage(topic.GenerateID(), messageBody)
 	msg.deferred = timeoutDuration
 	err = topic.PutMessage(msg)
 	if err != nil {
@@ -910,7 +910,7 @@ func (p *protocolV2) TOUCH(client *clientV2, params [][]byte) ([]byte, error) {
 	return nil, nil
 }
 
-func readMPUB(r io.Reader, tmp []byte, idChan chan MessageID, maxMessageSize int64) ([]*Message, error) {
+func readMPUB(r io.Reader, tmp []byte, topic *Topic, maxMessageSize int64) ([]*Message, error) {
 	numMessages, err := readLen(r, tmp)
 	if err != nil {
 		return nil, protocol.NewFatalClientErr(err, "E_BAD_BODY", "MPUB failed to read message count")
@@ -945,7 +945,7 @@ func readMPUB(r io.Reader, tmp []byte, idChan chan MessageID, maxMessageSize int
 			return nil, protocol.NewFatalClientErr(err, "E_BAD_MESSAGE", "MPUB failed to read message body")
 		}
 
-		messages = append(messages, NewMessage(<-idChan, msgBody))
+		messages = append(messages, NewMessage(topic.GenerateID(), msgBody))
 	}
 
 	return messages, nil
