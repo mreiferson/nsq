@@ -87,7 +87,7 @@ func TestInFlightWorker(t *testing.T) {
 	channel := topic.GetChannel("channel")
 
 	for i := 0; i < count; i++ {
-		msg := NewMessage(<-nsqd.idChan, []byte("test"))
+		msg := NewMessage(topic.GenerateID(), []byte("test"))
 		channel.StartInFlightTimeout(msg, 0, opts.MsgTimeout)
 	}
 
@@ -129,7 +129,7 @@ func TestChannelEmpty(t *testing.T) {
 
 	msgs := make([]*Message, 0, 25)
 	for i := 0; i < 25; i++ {
-		msg := NewMessage(<-nsqd.idChan, []byte("test"))
+		msg := NewMessage(topic.GenerateID(), []byte("test"))
 		channel.StartInFlightTimeout(msg, 0, opts.MsgTimeout)
 		msgs = append(msgs, msg)
 	}
@@ -167,7 +167,7 @@ func TestChannelEmptyConsumer(t *testing.T) {
 	channel.AddClient(client.ID, client)
 
 	for i := 0; i < 25; i++ {
-		msg := NewMessage(<-nsqd.idChan, []byte("test"))
+		msg := NewMessage(topic.GenerateID(), []byte("test"))
 		channel.StartInFlightTimeout(msg, 0, opts.MsgTimeout)
 		client.SendingMessage()
 	}
@@ -206,15 +206,15 @@ func TestChannelHealth(t *testing.T) {
 
 	channel.backend = &errorBackendQueue{}
 
-	msg := NewMessage(<-nsqd.idChan, make([]byte, 100))
+	msg := NewMessage(topic.GenerateID(), make([]byte, 100))
 	err := channel.PutMessage(msg)
 	equal(t, err, nil)
 
-	msg = NewMessage(<-nsqd.idChan, make([]byte, 100))
+	msg = NewMessage(topic.GenerateID(), make([]byte, 100))
 	err = channel.PutMessage(msg)
 	equal(t, err, nil)
 
-	msg = NewMessage(<-nsqd.idChan, make([]byte, 100))
+	msg = NewMessage(topic.GenerateID(), make([]byte, 100))
 	err = channel.PutMessage(msg)
 	nequal(t, err, nil)
 
@@ -228,7 +228,7 @@ func TestChannelHealth(t *testing.T) {
 
 	channel.backend = &errorRecoveredBackendQueue{}
 
-	msg = NewMessage(<-nsqd.idChan, make([]byte, 100))
+	msg = NewMessage(topic.GenerateID(), make([]byte, 100))
 	err = channel.PutMessage(msg)
 	equal(t, err, nil)
 

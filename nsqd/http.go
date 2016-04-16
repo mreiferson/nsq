@@ -236,7 +236,7 @@ func (s *httpServer) doPUB(w http.ResponseWriter, req *http.Request, ps httprout
 		}
 	}
 
-	msg := NewMessage(<-s.ctx.nsqd.idChan, body)
+	msg := NewMessage(topic.GenerateID(), body)
 	msg.deferred = deferred
 	err = topic.PutMessage(msg)
 	if err != nil {
@@ -265,8 +265,7 @@ func (s *httpServer) doMPUB(w http.ResponseWriter, req *http.Request, ps httprou
 	_, ok := reqParams["binary"]
 	if ok {
 		tmp := make([]byte, 4)
-		msgs, err = readMPUB(req.Body, tmp, s.ctx.nsqd.idChan,
-			s.ctx.nsqd.getOpts().MaxMsgSize)
+		msgs, err = readMPUB(req.Body, tmp, topic, s.ctx.nsqd.getOpts().MaxMsgSize)
 		if err != nil {
 			return nil, http_api.Err{413, err.(*protocol.FatalClientErr).Code[2:]}
 		}
@@ -304,7 +303,7 @@ func (s *httpServer) doMPUB(w http.ResponseWriter, req *http.Request, ps httprou
 				return nil, http_api.Err{413, "MSG_TOO_BIG"}
 			}
 
-			msg := NewMessage(<-s.ctx.nsqd.idChan, block)
+			msg := NewMessage(topic.GenerateID(), block)
 			msgs = append(msgs, msg)
 		}
 	}
