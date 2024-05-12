@@ -23,8 +23,6 @@ type Message struct {
 	// for in-flight handling
 	deliveryTS time.Time
 	clientID   int64
-	pri        int64
-	index      int
 	deferred   time.Duration
 }
 

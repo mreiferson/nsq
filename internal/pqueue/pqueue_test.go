@@ -1,7 +1,6 @@
 package pqueue
 
 import (
-	"container/heap"
 	"math/rand"
 	"path/filepath"
 	"reflect"
@@ -21,59 +20,66 @@ func equal(t *testing.T, act, exp interface{}) {
 
 func TestPriorityQueue(t *testing.T) {
 	c := 100
-	pq := New(c)
+	pq := New[int, int64](c, Min[int64])
 
 	for i := 0; i < c+1; i++ {
-		heap.Push(&pq, &Item{Value: i, Priority: int64(i)})
+		pq.Push(i, int64(i))
 	}
 	equal(t, pq.Len(), c+1)
-	equal(t, cap(pq), c*2)
+	equal(t, cap(pq.items), c*2)
 
 	for i := 0; i < c+1; i++ {
-		item := heap.Pop(&pq)
-		equal(t, item.(*Item).Value.(int), i)
+		val, priority, ok := pq.Pop()
+		equal(t, ok, true)
+		equal(t, val, i)
+		equal(t, priority, int64(i))
 	}
-	equal(t, cap(pq), c/4)
+	equal(t, cap(pq.items), c/4)
 }
 
 func TestUnsortedInsert(t *testing.T) {
 	c := 100
-	pq := New(c)
+	pq := New[int, int64](c, Min[int64])
 	ints := make([]int, 0, c)
 
 	for i := 0; i < c; i++ {
 		v := rand.Int()
 		ints = append(ints, v)
-		heap.Push(&pq, &Item{Value: i, Priority: int64(v)})
+		pq.Push(i, int64(v))
 	}
 	equal(t, pq.Len(), c)
-	equal(t, cap(pq), c)
+	equal(t, cap(pq.items), c)
 
 	sort.Ints(ints)
+	max := int64(ints[len(ints)-1])
 
 	for i := 0; i < c; i++ {
-		item, _ := pq.PeekAndShift(int64(ints[len(ints)-1]))
-		equal(t, item.Priority, int64(ints[i]))
+		_, priority, ok := pq.PeekAndShift(func(p int64) bool {
+			return p > max
+		})
+		equal(t, ok, true)
+		equal(t, priority, int64(ints[i]))
 	}
 }
 
 func TestRemove(t *testing.T) {
 	c := 100
-	pq := New(c)
+	pq := New[string, int64](c, Min[int64])
 
 	for i := 0; i < c; i++ {
 		v := rand.Int()
-		heap.Push(&pq, &Item{Value: "test", Priority: int64(v)})
+		pq.Push("test", int64(v))
 	}
 
 	for i := 0; i < 10; i++ {
-		heap.Remove(&pq, rand.Intn((c-1)-i))
+		pq.Remove(rand.Intn((c - 1) - i))
 	}
 
-	lastPriority := heap.Pop(&pq).(*Item).Priority
+	_, lastPriority, _ := pq.Pop()
 	for i := 0; i < (c - 10 - 1); i++ {
-		item := heap.Pop(&pq)
-		equal(t, lastPriority < item.(*Item).Priority, true)
-		lastPriority = item.(*Item).Priority
+		_, priority, ok := pq.Pop()
+		equal(t, lastPriority < priority, true)
+		equal(t, ok, true)
+		lastPriority = priority
 	}
 }

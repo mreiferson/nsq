@@ -1,6 +1,6 @@
 module github.com/nsqio/nsq
 
-go 1.17
+go 1.20
 
 require (
 	github.com/BurntSushi/toml v1.3.2
@@ -18,6 +18,7 @@ require (
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
 	golang.org/x/sys v0.10.0 // indirect
 )
 
