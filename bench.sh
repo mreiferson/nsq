@@ -5,6 +5,7 @@ readonly memQueueSize="${3:-1000000}"
 readonly dataPath="${4:-}"
 set -e
 set -u
+set -x
 
 echo "# using --mem-queue-size=$memQueueSize --data-path=$dataPath --size=$messageSize --batch-size=$batchSize"
 echo "# compiling/running nsqd"
@@ -21,10 +22,10 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
-sleep 0.3
+sleep 1.0
 echo "# creating topic/channel"
-curl --silent 'http://127.0.0.1:4151/create_topic?topic=sub_bench' >/dev/null 2>&1
-curl --silent 'http://127.0.0.1:4151/create_channel?topic=sub_bench&channel=ch' >/dev/null 2>&1
+curl --silent -X POST 'http://127.0.0.1:4151/topic/create?topic=sub_bench' >/dev/null 2>&1
+curl --silent -X POST 'http://127.0.0.1:4151/channel/create?topic=sub_bench&channel=ch' >/dev/null 2>&1
 
 echo "# compiling bench_reader/bench_writer"
 pushd bench >/dev/null
