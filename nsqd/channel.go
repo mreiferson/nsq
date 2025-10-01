@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nsqio/go-diskqueue"
+	"github.com/puzpuzpuz/xsync/v3"
 
 	"github.com/nsqio/nsq/internal/lg"
 	"github.com/nsqio/nsq/internal/pqueue"
@@ -72,9 +73,8 @@ type Channel struct {
 	deferredMessages map[MessageID]*pqueue.Item
 	deferredPQ       pqueue.PriorityQueue
 	deferredMutex    sync.Mutex
-	inFlightMessages map[MessageID]*Message
-	inFlightPQ       inFlightPqueue
-	inFlightMutex    sync.Mutex
+	inFlightMessages *xsync.MapOf[MessageID, *Message] // lock-free concurrent map with better performance
+	inFlightPQ       *inFlightSkipList              // lock-free skiplist for timeout ordering
 }
 
 // NewChannel creates a new instance of the Channel type and returns a pointer
@@ -90,6 +90,8 @@ func NewChannel(topicName string, channelName string, nsqd *NSQD,
 		nsqd:                     nsqd,
 		ephemeral:                strings.HasSuffix(channelName, "#ephemeral"),
 		topologyAwareConsumption: nsqd.getOpts().HasExperiment(TopologyAwareConsumption),
+		inFlightMessages:         xsync.NewMapOf[MessageID, *Message](),
+		inFlightPQ:               newInFlightSkipList(),
 	}
 
 	if nsqd.getOpts().TopologyRegion != "" {
@@ -141,10 +143,9 @@ func NewChannel(topicName string, channelName string, nsqd *NSQD,
 func (c *Channel) initPQ() {
 	pqSize := int(math.Max(1, float64(c.nsqd.getOpts().MemQueueSize)/10))
 
-	c.inFlightMutex.Lock()
-	c.inFlightMessages = make(map[MessageID]*Message)
-	c.inFlightPQ = newInFlightPqueue(pqSize)
-	c.inFlightMutex.Unlock()
+	// clear xsync.MapOf and skiplist by creating new ones
+	c.inFlightMessages = xsync.NewMapOf[MessageID, *Message]()
+	c.inFlightPQ = newInFlightSkipList()
 
 	c.deferredMutex.Lock()
 	c.deferredMessages = make(map[MessageID]*pqueue.Item)
@@ -229,9 +230,10 @@ finish:
 // flush persists all the messages in internal memory buffers to the backend
 // it does not drain inflight/deferred because it is only called in Close()
 func (c *Channel) flush() error {
-	if len(c.zoneLocalMsgChan) > 0 || len(c.regionLocalMsgChan) > 0 || len(c.memoryMsgChan) > 0 || len(c.inFlightMessages) > 0 || len(c.deferredMessages) > 0 {
+	inFlightCount := c.inFlightMessages.Size()
+	if len(c.zoneLocalMsgChan) > 0 || len(c.regionLocalMsgChan) > 0 || len(c.memoryMsgChan) > 0 || inFlightCount > 0 || len(c.deferredMessages) > 0 {
 		c.nsqd.logf(LOG_INFO, "CHANNEL(%s): flushing %d memory %d in-flight %d deferred messages to backend",
-			c.name, len(c.memoryMsgChan)+len(c.zoneLocalMsgChan)+len(c.regionLocalMsgChan), len(c.inFlightMessages), len(c.deferredMessages))
+			c.name, len(c.memoryMsgChan)+len(c.zoneLocalMsgChan)+len(c.regionLocalMsgChan), inFlightCount, len(c.deferredMessages))
 	}
 
 	for {
@@ -257,14 +259,12 @@ func (c *Channel) flush() error {
 	}
 
 finish:
-	c.inFlightMutex.Lock()
-	for _, msg := range c.inFlightMessages {
+	c.inFlightIterate(func(msg *Message) {
 		err := writeMessageToBackend(msg, c.backend)
 		if err != nil {
 			c.nsqd.logf(LOG_ERROR, "failed to write message to backend - %s", err)
 		}
-	}
-	c.inFlightMutex.Unlock()
+	})
 
 	c.deferredMutex.Lock()
 	for _, item := range c.deferredMessages {
@@ -532,49 +532,40 @@ func (c *Channel) StartDeferredTimeout(msg *Message, timeout time.Duration) erro
 
 // pushInFlightMessage atomically adds a message to the in-flight dictionary
 func (c *Channel) pushInFlightMessage(msg *Message) error {
-	c.inFlightMutex.Lock()
-	_, ok := c.inFlightMessages[msg.ID]
-	if ok {
-		c.inFlightMutex.Unlock()
+	_, loaded := c.inFlightMessages.LoadOrStore(msg.ID, msg)
+	if loaded {
 		return errors.New("ID already in flight")
 	}
-	c.inFlightMessages[msg.ID] = msg
-	c.inFlightMutex.Unlock()
 	return nil
 }
 
 // popInFlightMessage atomically removes a message from the in-flight dictionary
 func (c *Channel) popInFlightMessage(clientID int64, id MessageID) (*Message, error) {
-	c.inFlightMutex.Lock()
-	msg, ok := c.inFlightMessages[id]
+	msg, ok := c.inFlightMessages.Load(id)
 	if !ok {
-		c.inFlightMutex.Unlock()
 		return nil, errors.New("ID not in flight")
 	}
 	if msg.clientID != clientID {
-		c.inFlightMutex.Unlock()
 		return nil, errors.New("client does not own message")
 	}
-	delete(c.inFlightMessages, id)
-	c.inFlightMutex.Unlock()
+	c.inFlightMessages.Delete(id)
 	return msg, nil
 }
 
+// inFlightIterate calls fn for each in-flight message
+func (c *Channel) inFlightIterate(fn func(*Message)) {
+	c.inFlightMessages.Range(func(key MessageID, value *Message) bool {
+		fn(value)
+		return true
+	})
+}
+
 func (c *Channel) addToInFlightPQ(msg *Message) {
-	c.inFlightMutex.Lock()
-	c.inFlightPQ.Push(msg)
-	c.inFlightMutex.Unlock()
+	c.inFlightPQ.Insert(msg)
 }
 
 func (c *Channel) removeFromInFlightPQ(msg *Message) {
-	c.inFlightMutex.Lock()
-	if msg.index == -1 {
-		// this item has already been popped off the pqueue
-		c.inFlightMutex.Unlock()
-		return
-	}
-	c.inFlightPQ.Remove(msg.index)
-	c.inFlightMutex.Unlock()
+	c.inFlightPQ.Remove(msg)
 }
 
 func (c *Channel) pushDeferredMessage(item *pqueue.Item) error {
@@ -651,9 +642,7 @@ func (c *Channel) processInFlightQueue(t int64) bool {
 
 	dirty := false
 	for {
-		c.inFlightMutex.Lock()
 		msg, _ := c.inFlightPQ.PeekAndShift(t)
-		c.inFlightMutex.Unlock()
 
 		if msg == nil {
 			goto exit

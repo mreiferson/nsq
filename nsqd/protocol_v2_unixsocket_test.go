@@ -1196,9 +1196,7 @@ func TestUnixSocketSampling(t *testing.T) {
 	}()
 	<-doneChan
 
-	channel.inFlightMutex.Lock()
-	numInFlight := len(channel.inFlightMessages)
-	channel.inFlightMutex.Unlock()
+	numInFlight := channel.inFlightMessages.Size()
 
 	test.Equal(t, true, numInFlight <= int(float64(num)*float64(sampleRate+slack)/100.0))
 	test.Equal(t, true, numInFlight >= int(float64(num)*float64(sampleRate-slack)/100.0))

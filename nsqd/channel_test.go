@@ -80,13 +80,11 @@ func TestInFlightWorker(t *testing.T) {
 	}
 
 	channel.Lock()
-	inFlightMsgs := len(channel.inFlightMessages)
+	inFlightMsgs := channel.inFlightMessages.Size()
 	channel.Unlock()
 	test.Equal(t, count, inFlightMsgs)
 
-	channel.inFlightMutex.Lock()
-	inFlightPQMsgs := len(channel.inFlightPQ)
-	channel.inFlightMutex.Unlock()
+	inFlightPQMsgs := channel.inFlightPQ.Len()
 	test.Equal(t, count, inFlightPQMsgs)
 
 	// the in flight worker has a resolution of 100ms so we need to wait
@@ -94,13 +92,11 @@ func TestInFlightWorker(t *testing.T) {
 	time.Sleep(4 * opts.MsgTimeout)
 
 	channel.Lock()
-	inFlightMsgs = len(channel.inFlightMessages)
+	inFlightMsgs = channel.inFlightMessages.Size()
 	channel.Unlock()
 	test.Equal(t, 0, inFlightMsgs)
 
-	channel.inFlightMutex.Lock()
-	inFlightPQMsgs = len(channel.inFlightPQ)
-	channel.inFlightMutex.Unlock()
+	inFlightPQMsgs = channel.inFlightPQ.Len()
 	test.Equal(t, 0, inFlightPQMsgs)
 }
 
@@ -123,15 +119,15 @@ func TestChannelEmpty(t *testing.T) {
 	}
 
 	channel.RequeueMessage(0, msgs[len(msgs)-1].ID, 100*time.Millisecond)
-	test.Equal(t, 24, len(channel.inFlightMessages))
-	test.Equal(t, 24, len(channel.inFlightPQ))
+	test.Equal(t, 24, channel.inFlightMessages.Size())
+	test.Equal(t, 24, channel.inFlightPQ.Len())
 	test.Equal(t, 1, len(channel.deferredMessages))
 	test.Equal(t, 1, len(channel.deferredPQ))
 
 	channel.Empty()
 
-	test.Equal(t, 0, len(channel.inFlightMessages))
-	test.Equal(t, 0, len(channel.inFlightPQ))
+	test.Equal(t, 0, channel.inFlightMessages.Size())
+	test.Equal(t, 0, channel.inFlightPQ.Len())
 	test.Equal(t, 0, len(channel.deferredMessages))
 	test.Equal(t, 0, len(channel.deferredPQ))
 	test.Equal(t, int64(0), channel.Depth())

@@ -24,7 +24,6 @@ type Message struct {
 	deliveryTS time.Time
 	clientID   int64
 	pri        int64
-	index      int
 	deferred   time.Duration
 }
 
