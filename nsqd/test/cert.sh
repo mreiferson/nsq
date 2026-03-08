@@ -21,7 +21,7 @@ mkdir tmp
 cd tmp
 
 echo "make CA"
-openssl req -new -x509 -days 3650 -keyout ca.key -out ca.pem \
+openssl req -new -x509 -days 3650 -newkey rsa:2048 -keyout ca.key -out ca.pem \
     -config ../openssl.conf -extensions ca \
     -subj "/CN=ca" \
     -passout pass:$PRIVKEY
