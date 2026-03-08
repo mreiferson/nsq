@@ -13,7 +13,7 @@ import (
 	"os"
 	"path"
 	"reflect"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -329,7 +329,7 @@ func (s *httpServer) channelHandler(w http.ResponseWriter, req *http.Request, ps
 		messages = append(messages, pe.Error())
 	}
 
-	sort.Sort(clusterinfo.ClientStatsByNodeTopology{channelStats[channelName].Clients})
+	slices.SortFunc(channelStats[channelName].Clients, clusterinfo.ClientsByNodeTopologyCmp)
 
 	return struct {
 		*clusterinfo.ChannelStats

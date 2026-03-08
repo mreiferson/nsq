@@ -1,9 +1,10 @@
 package clusterinfo
 
 import (
+	"cmp"
 	"encoding/json"
 	"net"
-	"sort"
+	"slices"
 	"strconv"
 	"time"
 
@@ -17,10 +18,6 @@ type ProducerTopic struct {
 }
 
 type ProducerTopics []ProducerTopic
-
-func (pt ProducerTopics) Len() int           { return len(pt) }
-func (pt ProducerTopics) Swap(i, j int)      { pt[i], pt[j] = pt[j], pt[i] }
-func (pt ProducerTopics) Less(i, j int) bool { return pt[i].Topic < pt[j].Topic }
 
 type Producer struct {
 	RemoteAddresses  []string       `json:"remote_addresses"`
@@ -142,7 +139,7 @@ func (t *TopicStats) Add(a *TopicStats) {
 		}
 	}
 	t.NodeStats = append(t.NodeStats, a)
-	sort.Sort(TopicStatsByHost{t.NodeStats})
+	slices.SortFunc(t.NodeStats, topicStatsByHostname)
 	if t.E2eProcessingLatency == nil {
 		t.E2eProcessingLatency = &quantile.E2eProcessingLatencyAggregate{
 			Addr:  t.Node,
@@ -197,7 +194,7 @@ func (c *ChannelStats) Add(a *ChannelStats) {
 		c.Paused = a.Paused
 	}
 	c.NodeStats = append(c.NodeStats, a)
-	sort.Sort(ChannelStatsByHost{c.NodeStats})
+	slices.SortFunc(c.NodeStats, channelStatsByHostname)
 	if c.E2eProcessingLatency == nil {
 		c.E2eProcessingLatency = &quantile.E2eProcessingLatencyAggregate{
 			Addr:    c.Node,
@@ -207,7 +204,7 @@ func (c *ChannelStats) Add(a *ChannelStats) {
 	}
 	c.E2eProcessingLatency.Add(a.E2eProcessingLatency)
 	c.Clients = append(c.Clients, a.Clients...)
-	sort.Sort(ClientsByHost{c.Clients})
+	slices.SortFunc(c.Clients, clientStatsByHostname)
 }
 
 type ClientStats struct {
@@ -262,78 +259,46 @@ func (s *ClientStats) HasSampleRate() bool {
 	return s.SampleRate > 0
 }
 
-type ChannelStatsList []*ChannelStats
+func topicStatsByHostname(a, b *TopicStats) int     { return cmp.Compare(a.Hostname, b.Hostname) }
+func channelStatsByHostname(a, b *ChannelStats) int { return cmp.Compare(a.Hostname, b.Hostname) }
+func clientStatsByHostname(a, b *ClientStats) int   { return cmp.Compare(a.Hostname, b.Hostname) }
+func producersByHostname(a, b *Producer) int        { return cmp.Compare(a.Hostname, b.Hostname) }
+func producerTopicsByName(a, b ProducerTopic) int   { return cmp.Compare(a.Topic, b.Topic) }
 
-func (c ChannelStatsList) Len() int      { return len(c) }
-func (c ChannelStatsList) Swap(i, j int) { c[i], c[j] = c[j], c[i] }
-
-type ChannelStatsByHost struct {
-	ChannelStatsList
-}
-
-func (c ChannelStatsByHost) Less(i, j int) bool {
-	return c.ChannelStatsList[i].Hostname < c.ChannelStatsList[j].Hostname
-}
-
-type ClientStatsList []*ClientStats
-
-func (c ClientStatsList) Len() int      { return len(c) }
-func (c ClientStatsList) Swap(i, j int) { c[i], c[j] = c[j], c[i] }
-
-type ClientsByHost struct {
-	ClientStatsList
-}
-
-func (c ClientsByHost) Less(i, j int) bool {
-	return c.ClientStatsList[i].Hostname < c.ClientStatsList[j].Hostname
-}
-
-type ClientStatsByNodeTopology struct {
-	ClientStatsList
-}
-
-func (c ClientStatsByNodeTopology) Less(i, j int) bool {
-	// if its the same node, sort by topology
-	if c.ClientStatsList[i].Node == c.ClientStatsList[j].Node {
-		region := c.ClientStatsList[i].NodeTopologyRegion
-		zone := c.ClientStatsList[i].NodeTopologyZone
-
-		switch {
-		case c.ClientStatsList[i].TopologyRegion == region && c.ClientStatsList[i].TopologyZone == zone:
-			return true
-		case c.ClientStatsList[j].TopologyRegion == region && c.ClientStatsList[j].TopologyZone == zone:
-			return false
-		case c.ClientStatsList[i].TopologyRegion == region:
-			return true
-		case c.ClientStatsList[j].TopologyRegion == region:
-			return false
-		default:
-			if c.ClientStatsList[i].TopologyRegion == c.ClientStatsList[j].TopologyRegion {
-				return c.ClientStatsList[i].TopologyZone < c.ClientStatsList[j].TopologyZone
-			}
-			return c.ClientStatsList[i].TopologyRegion < c.ClientStatsList[j].TopologyRegion
-		}
+// ClientsByNodeTopologyCmp compares ClientStats by node, then by topology proximity.
+// Within the same node, clients in the same zone/region are ranked first.
+func ClientsByNodeTopologyCmp(a, b *ClientStats) int {
+	if a.Node != b.Node {
+		return cmp.Compare(a.Node, b.Node)
 	}
-	return c.ClientStatsList[i].Node < c.ClientStatsList[j].Node
-}
+	region := a.NodeTopologyRegion
+	zone := a.NodeTopologyZone
 
-type TopicStatsList []*TopicStats
+	aExact := a.TopologyRegion == region && a.TopologyZone == zone
+	bExact := b.TopologyRegion == region && b.TopologyZone == zone
+	if aExact != bExact {
+		if aExact {
+			return -1
+		}
+		return 1
+	}
 
-func (t TopicStatsList) Len() int      { return len(t) }
-func (t TopicStatsList) Swap(i, j int) { t[i], t[j] = t[j], t[i] }
+	aRegion := a.TopologyRegion == region
+	bRegion := b.TopologyRegion == region
+	if aRegion != bRegion {
+		if aRegion {
+			return -1
+		}
+		return 1
+	}
 
-type TopicStatsByHost struct {
-	TopicStatsList
-}
-
-func (c TopicStatsByHost) Less(i, j int) bool {
-	return c.TopicStatsList[i].Hostname < c.TopicStatsList[j].Hostname
+	if a.TopologyRegion != b.TopologyRegion {
+		return cmp.Compare(a.TopologyRegion, b.TopologyRegion)
+	}
+	return cmp.Compare(a.TopologyZone, b.TopologyZone)
 }
 
 type Producers []*Producer
-
-func (t Producers) Len() int      { return len(t) }
-func (t Producers) Swap(i, j int) { t[i], t[j] = t[j], t[i] }
 
 func (t Producers) HTTPAddrs() []string {
 	var addrs []string
@@ -350,12 +315,4 @@ func (t Producers) Search(needle string) *Producer {
 		}
 	}
 	return nil
-}
-
-type ProducersByHost struct {
-	Producers
-}
-
-func (c ProducersByHost) Less(i, j int) bool {
-	return c.Producers[i].Hostname < c.Producers[j].Hostname
 }

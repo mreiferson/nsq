@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,7 +12,6 @@ import (
 	"github.com/blang/semver"
 	"github.com/nsqio/nsq/internal/http_api"
 	"github.com/nsqio/nsq/internal/lg"
-	"github.com/nsqio/nsq/internal/stringy"
 )
 
 type PartialErr interface {
@@ -108,8 +107,8 @@ func (c *ClusterInfo) GetLookupdTopics(lookupdHTTPAddrs []string) ([]string, err
 		return nil, fmt.Errorf("failed to query any nsqlookupd: %s", ErrList(errs))
 	}
 
-	topics = stringy.Uniq(topics)
-	sort.Strings(topics)
+	slices.Sort(topics)
+	topics = slices.Compact(topics)
 
 	if len(errs) > 0 {
 		return topics, ErrList(errs)
@@ -157,8 +156,8 @@ func (c *ClusterInfo) GetLookupdTopicChannels(topic string, lookupdHTTPAddrs []s
 		return nil, fmt.Errorf("failed to query any nsqlookupd: %s", ErrList(errs))
 	}
 
-	channels = stringy.Uniq(channels)
-	sort.Strings(channels)
+	slices.Sort(channels)
+	channels = slices.Compact(channels)
 
 	if len(errs) > 0 {
 		return channels, ErrList(errs)
@@ -208,7 +207,7 @@ func (c *ClusterInfo) GetLookupdProducers(lookupdHTTPAddrs []string) (Producers,
 					if maxVersion.LT(producer.VersionObj) {
 						maxVersion = producer.VersionObj
 					}
-					sort.Sort(producer.Topics)
+					slices.SortFunc(producer.Topics, producerTopicsByName)
 					p = producer
 				}
 				p.RemoteAddresses = append(p.RemoteAddresses,
@@ -227,7 +226,7 @@ func (c *ClusterInfo) GetLookupdProducers(lookupdHTTPAddrs []string) (Producers,
 			producer.OutOfDate = true
 		}
 	}
-	sort.Sort(ProducersByHost{producers})
+	slices.SortFunc(producers, producersByHostname)
 
 	if len(errs) > 0 {
 		return producers, ErrList(errs)
@@ -321,7 +320,9 @@ func (c *ClusterInfo) GetNSQDTopics(nsqdHTTPAddrs []string) ([]string, error) {
 			lock.Lock()
 			defer lock.Unlock()
 			for _, topic := range resp.Topics {
-				topics = stringy.Add(topics, topic.Name)
+				if !slices.Contains(topics, topic.Name) {
+					topics = append(topics, topic.Name)
+				}
 			}
 		}(addr)
 	}
@@ -331,7 +332,7 @@ func (c *ClusterInfo) GetNSQDTopics(nsqdHTTPAddrs []string) ([]string, error) {
 		return nil, fmt.Errorf("failed to query any nsqd: %s", ErrList(errs))
 	}
 
-	sort.Strings(topics)
+	slices.Sort(topics)
 
 	if len(errs) > 0 {
 		return topics, ErrList(errs)
@@ -546,7 +547,7 @@ func (c *ClusterInfo) GetNSQDStats(producers Producers,
 	includeClients bool) ([]*TopicStats, map[string]*ChannelStats, error) {
 	var lock sync.Mutex
 	var wg sync.WaitGroup
-	var topicStatsList TopicStatsList
+	var topicStatsList []*TopicStats
 	var errs []error
 
 	channelStatsMap := make(map[string]*ChannelStats)
@@ -631,7 +632,7 @@ func (c *ClusterInfo) GetNSQDStats(producers Producers,
 		return nil, nil, fmt.Errorf("failed to query any nsqd: %s", ErrList(errs))
 	}
 
-	sort.Sort(TopicStatsByHost{topicStatsList})
+	slices.SortFunc(topicStatsList, topicStatsByHostname)
 
 	if len(errs) > 0 {
 		return topicStatsList, channelStatsMap, ErrList(errs)

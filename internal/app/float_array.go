@@ -1,9 +1,10 @@
 package app
 
 import (
+	"cmp"
 	"fmt"
 	"log"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -21,13 +22,9 @@ func (a *FloatArray) Set(param string) error {
 		}
 		*a = append(*a, v)
 	}
-	sort.Sort(*a)
+	slices.SortFunc(*a, func(x, y float64) int { return cmp.Compare(y, x) })
 	return nil
 }
-
-func (a FloatArray) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a FloatArray) Less(i, j int) bool { return a[i] > a[j] }
-func (a FloatArray) Len() int           { return len(a) }
 
 func (a *FloatArray) String() string {
 	var s []string

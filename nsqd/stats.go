@@ -1,8 +1,9 @@
 package nsqd
 
 import (
+	"cmp"
 	"runtime"
-	"sort"
+	"slices"
 
 	"github.com/nsqio/nsq/internal/quantile"
 )
@@ -85,28 +86,6 @@ func NewChannelStats(c *Channel, clients []ClientStats, clientCount int) Channel
 	}
 }
 
-type Topics []*Topic
-
-func (t Topics) Len() int      { return len(t) }
-func (t Topics) Swap(i, j int) { t[i], t[j] = t[j], t[i] }
-
-type TopicsByName struct {
-	Topics
-}
-
-func (t TopicsByName) Less(i, j int) bool { return t.Topics[i].name < t.Topics[j].name }
-
-type Channels []*Channel
-
-func (c Channels) Len() int      { return len(c) }
-func (c Channels) Swap(i, j int) { c[i], c[j] = c[j], c[i] }
-
-type ChannelsByName struct {
-	Channels
-}
-
-func (c ChannelsByName) Less(i, j int) bool { return c.Channels[i].name < c.Channels[j].name }
-
 func (n *NSQD) GetStats(topic string, channel string, includeClients bool) Stats {
 	var stats Stats
 
@@ -124,7 +103,7 @@ func (n *NSQD) GetStats(topic string, channel string, includeClients bool) Stats
 		return stats
 	}
 	n.RUnlock()
-	sort.Sort(TopicsByName{realTopics})
+	slices.SortFunc(realTopics, func(a, b *Topic) int { return cmp.Compare(a.name, b.name) })
 
 	topics := make([]TopicStats, 0, len(realTopics))
 
@@ -143,7 +122,7 @@ func (n *NSQD) GetStats(topic string, channel string, includeClients bool) Stats
 			continue
 		}
 		t.RUnlock()
-		sort.Sort(ChannelsByName{realChannels})
+		slices.SortFunc(realChannels, func(a, b *Channel) int { return cmp.Compare(a.name, b.name) })
 		channels := make([]ChannelStats, 0, len(realChannels))
 		for _, c := range realChannels {
 			var clients []ClientStats
@@ -199,9 +178,9 @@ func getMemStats() memStats {
 	if int(ms.NumGC) < length {
 		length = int(ms.NumGC)
 	}
-	gcPauses := make(Uint64Slice, length)
+	gcPauses := make([]uint64, length)
 	copy(gcPauses, ms.PauseNs[:length])
-	sort.Sort(gcPauses)
+	slices.Sort(gcPauses)
 
 	return memStats{
 		ms.HeapObjects,

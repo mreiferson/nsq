@@ -11,20 +11,6 @@ import (
 	"github.com/nsqio/nsq/internal/writers"
 )
 
-type Uint64Slice []uint64
-
-func (s Uint64Slice) Len() int {
-	return len(s)
-}
-
-func (s Uint64Slice) Swap(i, j int) {
-	s[i], s[j] = s[j], s[i]
-}
-
-func (s Uint64Slice) Less(i, j int) bool {
-	return s[i] < s[j]
-}
-
 func (n *NSQD) statsdLoop() {
 	var lastMemStats memStats
 	var lastStats Stats
