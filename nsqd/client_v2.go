@@ -130,15 +130,14 @@ func (s ClientV2Stats) String() string {
 }
 
 type clientV2 struct {
-	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
-	ReadyCount          int64
-	InFlightCount       int64
-	MessageCount        uint64
-	ZoneLocalMsgCount   uint64
-	RegionLocalMsgCount uint64
-	GlobalMsgCount      uint64
-	FinishCount         uint64
-	RequeueCount        uint64
+	ReadyCount          atomic.Int64
+	InFlightCount       atomic.Int64
+	MessageCount        atomic.Uint64
+	ZoneLocalMsgCount   atomic.Uint64
+	RegionLocalMsgCount atomic.Uint64
+	GlobalMsgCount      atomic.Uint64
+	FinishCount         atomic.Uint64
+	RequeueCount        atomic.Uint64
 
 	pubCounts map[string]uint64
 
@@ -167,7 +166,7 @@ type clientV2 struct {
 
 	MsgTimeout time.Duration
 
-	State          int32
+	State          atomic.Int32
 	ConnectTime    time.Time
 	Channel        *Channel
 	ReadyStateChan chan int
@@ -178,14 +177,14 @@ type clientV2 struct {
 	TopologyRegion string
 	TopologyZone   string
 
-	SampleRate int32
+	SampleRate atomic.Int32
 
 	IdentifyEventChan chan identifyEvent
 	SubEventChan      chan *Channel
 
-	TLS     int32
-	Snappy  int32
-	Deflate int32
+	TLS     atomic.Int32
+	Snappy  atomic.Int32
+	Deflate atomic.Int32
 
 	// re-usable buffer for reading the 4-byte lengths off the wire
 	lenBuf   [4]byte
@@ -220,7 +219,6 @@ func newClientV2(id int64, conn net.Conn, nsqd *NSQD) *clientV2 {
 		ReadyStateChan: make(chan int, 1),
 		ExitChan:       make(chan int),
 		ConnectTime:    time.Now(),
-		State:          stateInit,
 
 		ClientID: identifier,
 		Hostname: identifier,
@@ -285,7 +283,7 @@ func (c *clientV2) Identify(data identifyDataV2) error {
 	ie := identifyEvent{
 		OutputBufferTimeout: c.OutputBufferTimeout,
 		HeartbeatInterval:   c.HeartbeatInterval,
-		SampleRate:          c.SampleRate,
+		SampleRate:          c.SampleRate.Load(),
 		MsgTimeout:          c.MsgTimeout,
 		TopologyRegion:      c.TopologyRegion,
 		TopologyZone:        c.TopologyZone,
@@ -331,20 +329,20 @@ func (c *clientV2) Stats(topicName string) ClientStats {
 		ClientID:            clientID,
 		Hostname:            hostname,
 		UserAgent:           userAgent,
-		State:               atomic.LoadInt32(&c.State),
-		ReadyCount:          atomic.LoadInt64(&c.ReadyCount),
-		InFlightCount:       atomic.LoadInt64(&c.InFlightCount),
-		MessageCount:        atomic.LoadUint64(&c.MessageCount),
-		ZoneLocalMsgCount:   atomic.LoadUint64(&c.ZoneLocalMsgCount),
-		RegionLocalMsgCount: atomic.LoadUint64(&c.RegionLocalMsgCount),
-		GlobalMsgCount:      atomic.LoadUint64(&c.GlobalMsgCount),
-		FinishCount:         atomic.LoadUint64(&c.FinishCount),
-		RequeueCount:        atomic.LoadUint64(&c.RequeueCount),
+		State:               c.State.Load(),
+		ReadyCount:          c.ReadyCount.Load(),
+		InFlightCount:       c.InFlightCount.Load(),
+		MessageCount:        c.MessageCount.Load(),
+		ZoneLocalMsgCount:   c.ZoneLocalMsgCount.Load(),
+		RegionLocalMsgCount: c.RegionLocalMsgCount.Load(),
+		GlobalMsgCount:      c.GlobalMsgCount.Load(),
+		FinishCount:         c.FinishCount.Load(),
+		RequeueCount:        c.RequeueCount.Load(),
 		ConnectTime:         c.ConnectTime.Unix(),
-		SampleRate:          atomic.LoadInt32(&c.SampleRate),
-		TLS:                 atomic.LoadInt32(&c.TLS) == 1,
-		Deflate:             atomic.LoadInt32(&c.Deflate) == 1,
-		Snappy:              atomic.LoadInt32(&c.Snappy) == 1,
+		SampleRate:          c.SampleRate.Load(),
+		TLS:                 c.TLS.Load() == 1,
+		Deflate:             c.Deflate.Load() == 1,
+		Snappy:              c.Snappy.Load() == 1,
 		Authed:              c.HasAuthorizations(),
 		AuthIdentity:        identity,
 		AuthIdentityURL:     identityURL,
@@ -419,8 +417,8 @@ func (c *clientV2) IsReadyForMessages() bool {
 		return false
 	}
 
-	readyCount := atomic.LoadInt64(&c.ReadyCount)
-	inFlightCount := atomic.LoadInt64(&c.InFlightCount)
+	readyCount := c.ReadyCount.Load()
+	inFlightCount := c.InFlightCount.Load()
 
 	c.nsqd.logf(LOG_DEBUG, "[%s] state rdy: %4d inflt: %4d", c, readyCount, inFlightCount)
 
@@ -432,7 +430,7 @@ func (c *clientV2) IsReadyForMessages() bool {
 }
 
 func (c *clientV2) SetReadyCount(count int64) {
-	oldCount := atomic.SwapInt64(&c.ReadyCount, count)
+	oldCount := c.ReadyCount.Swap(count)
 
 	if oldCount != count {
 		c.tryUpdateReadyState()
@@ -450,19 +448,19 @@ func (c *clientV2) tryUpdateReadyState() {
 }
 
 func (c *clientV2) FinishedMessage() {
-	atomic.AddUint64(&c.FinishCount, 1)
-	atomic.AddInt64(&c.InFlightCount, -1)
+	c.FinishCount.Add(1)
+	c.InFlightCount.Add(-1)
 	c.tryUpdateReadyState()
 }
 
 func (c *clientV2) Empty() {
-	atomic.StoreInt64(&c.InFlightCount, 0)
+	c.InFlightCount.Store(0)
 	c.tryUpdateReadyState()
 }
 
 func (c *clientV2) SendingMessage() {
-	atomic.AddInt64(&c.InFlightCount, 1)
-	atomic.AddUint64(&c.MessageCount, 1)
+	c.InFlightCount.Add(1)
+	c.MessageCount.Add(1)
 }
 
 func (c *clientV2) PublishedMessage(topic string, count uint64) {
@@ -472,13 +470,13 @@ func (c *clientV2) PublishedMessage(topic string, count uint64) {
 }
 
 func (c *clientV2) TimedOutMessage() {
-	atomic.AddInt64(&c.InFlightCount, -1)
+	c.InFlightCount.Add(-1)
 	c.tryUpdateReadyState()
 }
 
 func (c *clientV2) RequeuedMessage() {
-	atomic.AddUint64(&c.RequeueCount, 1)
-	atomic.AddInt64(&c.InFlightCount, -1)
+	c.RequeueCount.Add(1)
+	c.InFlightCount.Add(-1)
 	c.tryUpdateReadyState()
 }
 
@@ -486,7 +484,7 @@ func (c *clientV2) StartClose() {
 	// Force the client into ready 0
 	c.SetReadyCount(0)
 	// mark this client as closing
-	atomic.StoreInt32(&c.State, stateClosing)
+	c.State.Store(stateClosing)
 }
 
 func (c *clientV2) Pause() {
@@ -562,7 +560,7 @@ func (c *clientV2) SetSampleRate(sampleRate int32) error {
 	if sampleRate < 0 || sampleRate > 99 {
 		return fmt.Errorf("sample rate (%d) is invalid", sampleRate)
 	}
-	atomic.StoreInt32(&c.SampleRate, sampleRate)
+	c.SampleRate.Store(sampleRate)
 	return nil
 }
 
@@ -598,7 +596,7 @@ func (c *clientV2) UpgradeTLS() error {
 	c.Reader = bufio.NewReaderSize(c.tlsConn, defaultBufferSize)
 	c.Writer = bufio.NewWriterSize(c.tlsConn, c.OutputBufferSize)
 
-	atomic.StoreInt32(&c.TLS, 1)
+	c.TLS.Store(1)
 
 	return nil
 }
@@ -618,7 +616,7 @@ func (c *clientV2) UpgradeDeflate(level int) error {
 	c.flateWriter = fw
 	c.Writer = bufio.NewWriterSize(fw, c.OutputBufferSize)
 
-	atomic.StoreInt32(&c.Deflate, 1)
+	c.Deflate.Store(1)
 
 	return nil
 }
@@ -636,7 +634,7 @@ func (c *clientV2) UpgradeSnappy() error {
 	//lint:ignore SA1019 NewWriter is deprecated by NewBufferedWriter, but we're doing our own buffering
 	c.Writer = bufio.NewWriterSize(snappy.NewWriter(conn), c.OutputBufferSize)
 
-	atomic.StoreInt32(&c.Snappy, 1)
+	c.Snappy.Store(1)
 
 	return nil
 }
@@ -671,7 +669,7 @@ func (c *clientV2) QueryAuthd() error {
 		remoteIP = ip
 	}
 
-	tlsEnabled := atomic.LoadInt32(&c.TLS) == 1
+	tlsEnabled := c.TLS.Load() == 1
 	commonName := ""
 	if tlsEnabled {
 		tlsConnState := c.tlsConn.ConnectionState()

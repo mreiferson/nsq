@@ -16,7 +16,6 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -525,7 +524,7 @@ func TestUnixSocketDPUB(t *testing.T) {
 
 	ch := nsqd.GetTopic(topicName).GetChannel("ch")
 	test.Equal(t, 1, ch.deferredMessages.Size())
-	test.Equal(t, 1, int(atomic.LoadUint64(&ch.messageCount)))
+	test.Equal(t, 1, int(ch.messageCount.Load()))
 
 	// duration out of range
 	nsq.DeferredPublish(topicName, opts.MaxDeferTimeout+100*time.Millisecond, make([]byte, 100)).WriteTo(conn)
@@ -579,7 +578,7 @@ func TestUnixSocketTouch(t *testing.T) {
 	_, err = nsq.Finish(nsq.MessageID(msg.ID)).WriteTo(conn)
 	test.Nil(t, err)
 
-	test.Equal(t, uint64(0), channel.timeoutCount)
+	test.Equal(t, uint64(0), channel.timeoutCount.Load())
 }
 
 func TestUnixSocketMaxRdyCount(t *testing.T) {
@@ -1279,8 +1278,8 @@ func TestUnixSocketClientMsgTimeout(t *testing.T) {
 	}, frameTypeResponse)
 	sub(t, conn, topicName, "ch")
 
-	test.Equal(t, 0, int(atomic.LoadUint64(&ch.timeoutCount)))
-	test.Equal(t, 0, int(atomic.LoadUint64(&ch.requeueCount)))
+	test.Equal(t, 0, int(ch.timeoutCount.Load()))
+	test.Equal(t, 0, int(ch.requeueCount.Load()))
 
 	_, err = nsq.Ready(1).WriteTo(conn)
 	test.Nil(t, err)
@@ -1296,8 +1295,8 @@ func TestUnixSocketClientMsgTimeout(t *testing.T) {
 
 	time.Sleep(1150 * time.Millisecond)
 
-	test.Equal(t, 1, int(atomic.LoadUint64(&ch.timeoutCount)))
-	test.Equal(t, 0, int(atomic.LoadUint64(&ch.requeueCount)))
+	test.Equal(t, 1, int(ch.timeoutCount.Load()))
+	test.Equal(t, 0, int(ch.requeueCount.Load()))
 
 	_, err = nsq.Finish(nsq.MessageID(msgOut.ID)).WriteTo(conn)
 	test.Nil(t, err)

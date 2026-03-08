@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"strconv"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,13 +63,13 @@ func TestStartup(t *testing.T) {
 	// verify nsqd metadata shows no topics
 	err := nsqd.PersistMetadata()
 	test.Nil(t, err)
-	atomic.StoreInt32(&nsqd.isLoading, 1)
+	nsqd.isLoading.Store(1)
 	nsqd.GetTopic(topicName) // will not persist if `flagLoading`
 	m, err := getMetadata(nsqd)
 	test.Nil(t, err)
 	test.Equal(t, 0, len(m.Topics))
 	nsqd.DeleteExistingTopic(topicName)
-	atomic.StoreInt32(&nsqd.isLoading, 0)
+	nsqd.isLoading.Store(0)
 
 	body := make([]byte, 256)
 	topic := nsqd.GetTopic(topicName)
@@ -213,11 +212,11 @@ func TestPauseMetadata(t *testing.T) {
 	defer nsqd.Exit()
 
 	// avoid concurrency issue of async PersistMetadata() calls
-	atomic.StoreInt32(&nsqd.isLoading, 1)
+	nsqd.isLoading.Store(1)
 	topicName := "pause_metadata" + strconv.Itoa(int(time.Now().Unix()))
 	topic := nsqd.GetTopic(topicName)
 	channel := topic.GetChannel("ch")
-	atomic.StoreInt32(&nsqd.isLoading, 0)
+	nsqd.isLoading.Store(0)
 	nsqd.PersistMetadata()
 
 	var isPaused = func(n *NSQD, topicIndex int, channelIndex int) bool {
@@ -285,7 +284,7 @@ func TestReconfigure(t *testing.T) {
 
 	var numLookupPeers int
 	for i := 0; i < 100; i++ {
-		numLookupPeers = len(nsqd.lookupPeers.Load().([]*lookupPeer))
+		numLookupPeers = len(*nsqd.lookupPeers.Load())
 		if numLookupPeers == 1 {
 			break
 		}
@@ -301,7 +300,7 @@ func TestReconfigure(t *testing.T) {
 	test.Equal(t, 2, len(nsqd.getOpts().NSQLookupdTCPAddresses))
 
 	for i := 0; i < 100; i++ {
-		numLookupPeers = len(nsqd.lookupPeers.Load().([]*lookupPeer))
+		numLookupPeers = len(*nsqd.lookupPeers.Load())
 		if numLookupPeers == 2 {
 			break
 		}
@@ -310,7 +309,7 @@ func TestReconfigure(t *testing.T) {
 	test.Equal(t, 2, numLookupPeers)
 
 	var lookupPeers []string
-	for _, lp := range nsqd.lookupPeers.Load().([]*lookupPeer) {
+	for _, lp := range *nsqd.lookupPeers.Load() {
 		lookupPeers = append(lookupPeers, lp.addr)
 	}
 	test.Equal(t, newOpts.NSQLookupdTCPAddresses, lookupPeers)

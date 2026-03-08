@@ -33,13 +33,12 @@ type Consumer interface {
 // Channels maintain all client and message metadata, orchestrating in-flight
 // messages, timeouts, requeuing, etc.
 type Channel struct {
-	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
-	requeueCount        uint64
-	messageCount        uint64
-	zoneLocalMsgCount   uint64
-	regionLocalMsgCount uint64
-	globalMsgCount      uint64
-	timeoutCount        uint64
+	requeueCount        atomic.Uint64
+	messageCount        atomic.Uint64
+	zoneLocalMsgCount   atomic.Uint64
+	regionLocalMsgCount atomic.Uint64
+	globalMsgCount      atomic.Uint64
+	timeoutCount        atomic.Uint64
 
 	sync.RWMutex
 
@@ -53,12 +52,12 @@ type Channel struct {
 	zoneLocalMsgChan         chan *Message
 	regionLocalMsgChan       chan *Message
 	memoryMsgChan            chan *Message
-	exitFlag                 int32
+	exitFlag                 atomic.Int32
 	exitMutex                sync.RWMutex
 
 	// state tracking
 	clients        map[int64]Consumer
-	paused         int32
+	paused         atomic.Int32
 	ephemeral      bool
 	deleteCallback func(*Channel)
 	deleter        sync.Once
@@ -146,7 +145,7 @@ func (c *Channel) initPQ() {
 
 // Exiting returns a boolean indicating if this channel is closed/exiting
 func (c *Channel) Exiting() bool {
-	return atomic.LoadInt32(&c.exitFlag) == 1
+	return c.exitFlag.Load() == 1
 }
 
 // Delete empties the channel and closes
@@ -163,7 +162,7 @@ func (c *Channel) exit(deleted bool) error {
 	c.exitMutex.Lock()
 	defer c.exitMutex.Unlock()
 
-	if !atomic.CompareAndSwapInt32(&c.exitFlag, 0, 1) {
+	if !c.exitFlag.CompareAndSwap(0, 1) {
 		return errors.New("exiting")
 	}
 
@@ -283,9 +282,9 @@ func (c *Channel) UnPause() error {
 
 func (c *Channel) doPause(pause bool) error {
 	if pause {
-		atomic.StoreInt32(&c.paused, 1)
+		c.paused.Store(1)
 	} else {
-		atomic.StoreInt32(&c.paused, 0)
+		c.paused.Store(0)
 	}
 
 	c.RLock()
@@ -301,7 +300,7 @@ func (c *Channel) doPause(pause bool) error {
 }
 
 func (c *Channel) IsPaused() bool {
-	return atomic.LoadInt32(&c.paused) == 1
+	return c.paused.Load() == 1
 }
 
 // PutMessage writes a Message to the queue
@@ -315,7 +314,7 @@ func (c *Channel) PutMessage(m *Message) error {
 	if err != nil {
 		return err
 	}
-	atomic.AddUint64(&c.messageCount, 1)
+	c.messageCount.Add(1)
 	return nil
 }
 
@@ -370,7 +369,7 @@ func (c *Channel) put(m *Message) error {
 }
 
 func (c *Channel) PutMessageDeferred(msg *Message, timeout time.Duration) {
-	atomic.AddUint64(&c.messageCount, 1)
+	c.messageCount.Add(1)
 	c.StartDeferredTimeout(msg, timeout)
 }
 
@@ -424,7 +423,7 @@ func (c *Channel) RequeueMessage(clientID int64, id MessageID, timeout time.Dura
 		return err
 	}
 	c.removeFromInFlightPQ(msg)
-	atomic.AddUint64(&c.requeueCount, 1)
+	c.requeueCount.Add(1)
 
 	if timeout == 0 {
 		c.exitMutex.RLock()
@@ -627,7 +626,7 @@ func (c *Channel) processInFlightQueue(t int64) bool {
 		if err != nil {
 			goto exit
 		}
-		atomic.AddUint64(&c.timeoutCount, 1)
+		c.timeoutCount.Add(1)
 		c.RLock()
 		client, ok := c.clients[msg.clientID]
 		c.RUnlock()

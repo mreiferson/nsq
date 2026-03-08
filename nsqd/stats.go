@@ -3,7 +3,6 @@ package nsqd
 import (
 	"runtime"
 	"sort"
-	"sync/atomic"
 
 	"github.com/nsqio/nsq/internal/quantile"
 )
@@ -35,8 +34,8 @@ func NewTopicStats(t *Topic, channels []ChannelStats) TopicStats {
 		Channels:     channels,
 		Depth:        t.Depth(),
 		BackendDepth: t.backend.Depth(),
-		MessageCount: atomic.LoadUint64(&t.messageCount),
-		MessageBytes: atomic.LoadUint64(&t.messageBytes),
+		MessageCount: t.messageCount.Load(),
+		MessageBytes: t.messageBytes.Load(),
 		Paused:       t.IsPaused(),
 
 		E2eProcessingLatency: t.AggregateChannelE2eProcessingLatency().Result(),
@@ -72,12 +71,12 @@ func NewChannelStats(c *Channel, clients []ClientStats, clientCount int) Channel
 		BackendDepth:        c.backend.Depth(),
 		InFlightCount:       inflight,
 		DeferredCount:       deferred,
-		MessageCount:        atomic.LoadUint64(&c.messageCount),
-		ZoneLocalMsgCount:   atomic.LoadUint64(&c.zoneLocalMsgCount),
-		RegionLocalMsgCount: atomic.LoadUint64(&c.regionLocalMsgCount),
-		GlobalMsgCount:      atomic.LoadUint64(&c.globalMsgCount),
-		RequeueCount:        atomic.LoadUint64(&c.requeueCount),
-		TimeoutCount:        atomic.LoadUint64(&c.timeoutCount),
+		MessageCount:        c.messageCount.Load(),
+		ZoneLocalMsgCount:   c.zoneLocalMsgCount.Load(),
+		RegionLocalMsgCount: c.regionLocalMsgCount.Load(),
+		GlobalMsgCount:      c.globalMsgCount.Load(),
+		RequeueCount:        c.requeueCount.Load(),
+		TimeoutCount:        c.timeoutCount.Load(),
 		ClientCount:         clientCount,
 		Clients:             clients,
 		Paused:              c.IsPaused(),

@@ -37,25 +37,24 @@ type errStore struct {
 }
 
 type NSQD struct {
-	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
-	clientIDSequence int64
+	clientIDSequence atomic.Int64
 
 	sync.RWMutex
 	ctx context.Context
 	// ctxCancel cancels a context that main() is waiting on
 	ctxCancel context.CancelFunc
 
-	opts atomic.Value
+	opts atomic.Pointer[Options]
 
 	dl        *dirlock.DirLock
-	isLoading int32
-	isExiting int32
-	errValue  atomic.Value
+	isLoading atomic.Int32
+	isExiting atomic.Int32
+	errValue  atomic.Pointer[errStore]
 	startTime time.Time
 
 	topicMap map[string]*Topic
 
-	lookupPeers atomic.Value
+	lookupPeers atomic.Pointer[[]*lookupPeer]
 
 	tcpServer       *tcpServer
 	tcpListener     net.Listener
@@ -98,10 +97,11 @@ func New(opts *Options) (*NSQD, error) {
 	httpcli := http_api.NewClient(nil, opts.HTTPClientConnectTimeout, opts.HTTPClientRequestTimeout)
 	n.ci = clusterinfo.New(n.logf, httpcli)
 
-	n.lookupPeers.Store([]*lookupPeer{})
+	lps := []*lookupPeer{}
+	n.lookupPeers.Store(&lps)
 
 	n.swapOpts(opts)
-	n.errValue.Store(errStore{})
+	n.errValue.Store(&errStore{})
 
 	err = n.dl.Lock()
 	if err != nil {
@@ -193,7 +193,7 @@ func New(opts *Options) (*NSQD, error) {
 }
 
 func (n *NSQD) getOpts() *Options {
-	return n.opts.Load().(*Options)
+	return n.opts.Load()
 }
 
 func (n *NSQD) swapOpts(opts *Options) {
@@ -230,7 +230,7 @@ func (n *NSQD) RealHTTPSAddr() *net.TCPAddr {
 }
 
 func (n *NSQD) SetHealth(err error) {
-	n.errValue.Store(errStore{err: err})
+	n.errValue.Store(&errStore{err: err})
 }
 
 func (n *NSQD) IsHealthy() bool {
@@ -238,8 +238,7 @@ func (n *NSQD) IsHealthy() bool {
 }
 
 func (n *NSQD) GetError() error {
-	errValue := n.errValue.Load()
-	return errValue.(errStore).err
+	return n.errValue.Load().err
 }
 
 func (n *NSQD) GetHealth() string {
@@ -340,8 +339,8 @@ func writeSyncFile(fn string, data []byte) error {
 }
 
 func (n *NSQD) LoadMetadata() error {
-	atomic.StoreInt32(&n.isLoading, 1)
-	defer atomic.StoreInt32(&n.isLoading, 0)
+	n.isLoading.Store(1)
+	defer n.isLoading.Store(0)
 
 	fn := newMetadataFile(n.getOpts())
 
@@ -440,7 +439,7 @@ func (n *NSQD) PersistMetadata() error {
 }
 
 func (n *NSQD) Exit() {
-	if !atomic.CompareAndSwapInt32(&n.isExiting, 0, 1) {
+	if !n.isExiting.CompareAndSwap(0, 1) {
 		// avoid double call
 		return
 	}
@@ -510,7 +509,7 @@ func (n *NSQD) GetTopic(topicName string) *Topic {
 
 	// if this topic was created while loading metadata at startup don't do any further initialization
 	// (topic will be "started" after loading completes)
-	if atomic.LoadInt32(&n.isLoading) == 1 {
+	if n.isLoading.Load() == 1 {
 		return t
 	}
 
@@ -577,7 +576,7 @@ func (n *NSQD) Notify(v interface{}, persist bool) {
 	// since the in-memory metadata is incomplete,
 	// should not persist metadata while loading it.
 	// nsqd will call `PersistMetadata` it after loading
-	loading := atomic.LoadInt32(&n.isLoading) == 1
+	loading := n.isLoading.Load() == 1
 	n.waitGroup.Wrap(func() {
 		// by selecting on exitChan we guarantee that
 		// we do not block exit, see issue #123

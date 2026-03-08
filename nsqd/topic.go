@@ -14,9 +14,8 @@ import (
 )
 
 type Topic struct {
-	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
-	messageCount uint64
-	messageBytes uint64
+	messageCount atomic.Uint64
+	messageBytes atomic.Uint64
 
 	sync.RWMutex
 
@@ -28,14 +27,14 @@ type Topic struct {
 	exitChan          chan int
 	channelUpdateChan chan int
 	waitGroup         util.WaitGroupWrapper
-	exitFlag          int32
+	exitFlag          atomic.Int32
 	idFactory         *guidFactory
 
 	ephemeral      bool
 	deleteCallback func(*Topic)
 	deleter        sync.Once
 
-	paused    int32
+	paused    atomic.Int32
 	pauseChan chan int
 
 	nsqd *NSQD
@@ -51,7 +50,6 @@ func NewTopic(topicName string, nsqd *NSQD, deleteCallback func(*Topic)) *Topic 
 		exitChan:          make(chan int),
 		channelUpdateChan: make(chan int),
 		nsqd:              nsqd,
-		paused:            0,
 		pauseChan:         make(chan int),
 		deleteCallback:    deleteCallback,
 		idFactory:         NewGUIDFactory(nsqd.getOpts().ID),
@@ -92,7 +90,7 @@ func (t *Topic) Start() {
 
 // Exiting returns a boolean indicating if this topic is closed/exiting
 func (t *Topic) Exiting() bool {
-	return atomic.LoadInt32(&t.exitFlag) == 1
+	return t.exitFlag.Load() == 1
 }
 
 // GetChannel performs a thread safe operation
@@ -180,15 +178,15 @@ func (t *Topic) DeleteExistingChannel(channelName string) error {
 func (t *Topic) PutMessage(m *Message) error {
 	t.RLock()
 	defer t.RUnlock()
-	if atomic.LoadInt32(&t.exitFlag) == 1 {
+	if t.exitFlag.Load() == 1 {
 		return errors.New("exiting")
 	}
 	err := t.put(m)
 	if err != nil {
 		return err
 	}
-	atomic.AddUint64(&t.messageCount, 1)
-	atomic.AddUint64(&t.messageBytes, uint64(len(m.Body)))
+	t.messageCount.Add(1)
+	t.messageBytes.Add(uint64(len(m.Body)))
 	return nil
 }
 
@@ -196,7 +194,7 @@ func (t *Topic) PutMessage(m *Message) error {
 func (t *Topic) PutMessages(msgs []*Message) error {
 	t.RLock()
 	defer t.RUnlock()
-	if atomic.LoadInt32(&t.exitFlag) == 1 {
+	if t.exitFlag.Load() == 1 {
 		return errors.New("exiting")
 	}
 
@@ -205,15 +203,15 @@ func (t *Topic) PutMessages(msgs []*Message) error {
 	for i, m := range msgs {
 		err := t.put(m)
 		if err != nil {
-			atomic.AddUint64(&t.messageCount, uint64(i))
-			atomic.AddUint64(&t.messageBytes, uint64(messageTotalBytes))
+			t.messageCount.Add(uint64(i))
+			t.messageBytes.Add(uint64(messageTotalBytes))
 			return err
 		}
 		messageTotalBytes += len(m.Body)
 	}
 
-	atomic.AddUint64(&t.messageBytes, uint64(messageTotalBytes))
-	atomic.AddUint64(&t.messageCount, uint64(len(msgs)))
+	t.messageBytes.Add(uint64(messageTotalBytes))
+	t.messageCount.Add(uint64(len(msgs)))
 	return nil
 }
 
@@ -354,7 +352,7 @@ func (t *Topic) Close() error {
 }
 
 func (t *Topic) exit(deleted bool) error {
-	if !atomic.CompareAndSwapInt32(&t.exitFlag, 0, 1) {
+	if !t.exitFlag.CompareAndSwap(0, 1) {
 		return errors.New("exiting")
 	}
 
@@ -471,9 +469,9 @@ func (t *Topic) UnPause() error {
 
 func (t *Topic) doPause(pause bool) error {
 	if pause {
-		atomic.StoreInt32(&t.paused, 1)
+		t.paused.Store(1)
 	} else {
-		atomic.StoreInt32(&t.paused, 0)
+		t.paused.Store(0)
 	}
 
 	select {
@@ -485,7 +483,7 @@ func (t *Topic) doPause(pause bool) error {
 }
 
 func (t *Topic) IsPaused() bool {
-	return atomic.LoadInt32(&t.paused) == 1
+	return t.paused.Load() == 1
 }
 
 func (t *Topic) GenerateID() MessageID {

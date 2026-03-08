@@ -104,7 +104,7 @@ func (n *NSQD) lookupLoop() {
 				lookupPeers = append(lookupPeers, lookupPeer)
 				lookupAddrs = append(lookupAddrs, host)
 			}
-			n.lookupPeers.Store(lookupPeers)
+			n.lookupPeers.Store(&lookupPeers)
 			connect = false
 		}
 
@@ -190,7 +190,7 @@ func (n *NSQD) lookupdHTTPAddrs() []string {
 	if lookupPeers == nil {
 		return nil
 	}
-	for _, lp := range lookupPeers.([]*lookupPeer) {
+	for _, lp := range *lookupPeers {
 		if len(lp.Info.BroadcastAddress) <= 0 {
 			continue
 		}

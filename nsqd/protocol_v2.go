@@ -9,7 +9,6 @@ import (
 	"io"
 	"math/rand"
 	"net"
-	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -32,7 +31,7 @@ type protocolV2 struct {
 }
 
 func (p *protocolV2) NewClient(conn net.Conn) protocol.Client {
-	clientID := atomic.AddInt64(&p.nsqd.clientIDSequence, 1)
+	clientID := p.nsqd.clientIDSequence.Add(1)
 	return newClientV2(clientID, conn, p.nsqd)
 }
 
@@ -327,20 +326,20 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 		case b = <-backendMsgChan:
 			// decodeMessage then handle 'msg'
 		case msg = <-zoneMsgChan:
-			atomic.AddUint64(&client.Channel.zoneLocalMsgCount, 1)
+			client.Channel.zoneLocalMsgCount.Add(1)
 		case msg = <-regionMsgChan:
 			if zoneLocal {
-				atomic.AddUint64(&client.Channel.zoneLocalMsgCount, 1)
+				client.Channel.zoneLocalMsgCount.Add(1)
 			} else {
-				atomic.AddUint64(&client.Channel.regionLocalMsgCount, 1)
+				client.Channel.regionLocalMsgCount.Add(1)
 			}
 		case msg = <-memoryMsgChan:
 			if zoneLocal {
-				atomic.AddUint64(&client.Channel.zoneLocalMsgCount, 1)
+				client.Channel.zoneLocalMsgCount.Add(1)
 			} else if regionLocal {
-				atomic.AddUint64(&client.Channel.regionLocalMsgCount, 1)
+				client.Channel.regionLocalMsgCount.Add(1)
 			} else {
-				atomic.AddUint64(&client.Channel.globalMsgCount, 1)
+				client.Channel.globalMsgCount.Add(1)
 			}
 		case <-client.ExitChan:
 			goto exit
@@ -380,7 +379,7 @@ exit:
 func (p *protocolV2) IDENTIFY(client *clientV2, params [][]byte) ([]byte, error) {
 	var err error
 
-	if atomic.LoadInt32(&client.State) != stateInit {
+	if client.State.Load() != stateInit {
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "cannot IDENTIFY in current state")
 	}
 
@@ -465,7 +464,7 @@ func (p *protocolV2) IDENTIFY(client *clientV2, params [][]byte) ([]byte, error)
 		DeflateLevel:        deflateLevel,
 		MaxDeflateLevel:     p.nsqd.getOpts().MaxDeflateLevel,
 		Snappy:              snappy,
-		SampleRate:          client.SampleRate,
+		SampleRate:          client.SampleRate.Load(),
 		AuthRequired:        p.nsqd.IsAuthEnabled(),
 		OutputBufferSize:    client.OutputBufferSize,
 		OutputBufferTimeout: int64(client.OutputBufferTimeout / time.Millisecond),
@@ -524,7 +523,7 @@ func (p *protocolV2) IDENTIFY(client *clientV2, params [][]byte) ([]byte, error)
 }
 
 func (p *protocolV2) AUTH(client *clientV2, params [][]byte) ([]byte, error) {
-	if atomic.LoadInt32(&client.State) != stateInit {
+	if client.State.Load() != stateInit {
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "cannot AUTH in current state")
 	}
 
@@ -616,7 +615,7 @@ func (p *protocolV2) CheckAuth(client *clientV2, cmd, topicName, channelName str
 }
 
 func (p *protocolV2) SUB(client *clientV2, params [][]byte) ([]byte, error) {
-	if atomic.LoadInt32(&client.State) != stateInit {
+	if client.State.Load() != stateInit {
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "cannot SUB in current state")
 	}
 
@@ -665,7 +664,7 @@ func (p *protocolV2) SUB(client *clientV2, params [][]byte) ([]byte, error) {
 		}
 		break
 	}
-	atomic.StoreInt32(&client.State, stateSubscribed)
+	client.State.Store(stateSubscribed)
 	client.Channel = channel
 	// update message pump
 	client.SubEventChan <- channel
@@ -674,7 +673,7 @@ func (p *protocolV2) SUB(client *clientV2, params [][]byte) ([]byte, error) {
 }
 
 func (p *protocolV2) RDY(client *clientV2, params [][]byte) ([]byte, error) {
-	state := atomic.LoadInt32(&client.State)
+	state := client.State.Load()
 
 	if state == stateClosing {
 		// just ignore ready changes on a closing channel
@@ -711,7 +710,7 @@ func (p *protocolV2) RDY(client *clientV2, params [][]byte) ([]byte, error) {
 }
 
 func (p *protocolV2) FIN(client *clientV2, params [][]byte) ([]byte, error) {
-	state := atomic.LoadInt32(&client.State)
+	state := client.State.Load()
 	if state != stateSubscribed && state != stateClosing {
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "cannot FIN in current state")
 	}
@@ -737,7 +736,7 @@ func (p *protocolV2) FIN(client *clientV2, params [][]byte) ([]byte, error) {
 }
 
 func (p *protocolV2) REQ(client *clientV2, params [][]byte) ([]byte, error) {
-	state := atomic.LoadInt32(&client.State)
+	state := client.State.Load()
 	if state != stateSubscribed && state != stateClosing {
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "cannot REQ in current state")
 	}
@@ -784,7 +783,7 @@ func (p *protocolV2) REQ(client *clientV2, params [][]byte) ([]byte, error) {
 }
 
 func (p *protocolV2) CLS(client *clientV2, params [][]byte) ([]byte, error) {
-	if atomic.LoadInt32(&client.State) != stateSubscribed {
+	if client.State.Load() != stateSubscribed {
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "cannot CLS in current state")
 	}
 
@@ -965,7 +964,7 @@ func (p *protocolV2) DPUB(client *clientV2, params [][]byte) ([]byte, error) {
 }
 
 func (p *protocolV2) TOUCH(client *clientV2, params [][]byte) ([]byte, error) {
-	state := atomic.LoadInt32(&client.State)
+	state := client.State.Load()
 	if state != stateSubscribed && state != stateClosing {
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "cannot TOUCH in current state")
 	}
@@ -1051,7 +1050,7 @@ func readLen(r io.Reader, tmp []byte) (int32, error) {
 }
 
 func enforceTLSPolicy(client *clientV2, p *protocolV2, command []byte) error {
-	if p.nsqd.getOpts().TLSRequired != TLSNotRequired && atomic.LoadInt32(&client.TLS) != 1 {
+	if p.nsqd.getOpts().TLSRequired != TLSNotRequired && client.TLS.Load() != 1 {
 		return protocol.NewFatalClientErr(nil, "E_INVALID",
 			fmt.Sprintf("cannot %s in current state (TLS required)", command))
 	}
