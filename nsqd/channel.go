@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/nsqio/go-diskqueue"
-	"github.com/puzpuzpuz/xsync/v3"
+	"github.com/puzpuzpuz/xsync/v4"
 
 	"github.com/nsqio/nsq/internal/lg"
 	"github.com/nsqio/nsq/internal/pqueue"
@@ -74,7 +74,7 @@ type Channel struct {
 	deferredPQ       pqueue.PriorityQueue
 	deferredMutex    sync.Mutex
 	inFlightMessages *xsync.MapOf[MessageID, *Message] // lock-free concurrent map with better performance
-	inFlightPQ       *inFlightSkipList              // lock-free skiplist for timeout ordering
+	inFlightPQ       *inFlightSkipList                 // lock-free skiplist for timeout ordering
 }
 
 // NewChannel creates a new instance of the Channel type and returns a pointer

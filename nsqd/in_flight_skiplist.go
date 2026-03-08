@@ -109,7 +109,7 @@ func (sl *inFlightSkipList) Remove(msg *Message) bool {
 	}
 
 	current = current.forward[0]
-	
+
 	// Check if we found the right message (same ID)
 	if current != nil && current.key == key && current.message.ID == msg.ID {
 		// Remove the node
@@ -152,7 +152,7 @@ func (sl *inFlightSkipList) PeekAndShift(max int64) (*Message, int64) {
 
 	// Remove the first element
 	msg := first.message
-	
+
 	// Update forward pointers
 	for i := 0; i <= sl.level; i++ {
 		if sl.header.forward[i] == first {
@@ -182,7 +182,7 @@ func (sl *inFlightSkipList) Len() int {
 func (sl *inFlightSkipList) Clear() {
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
-	
+
 	sl.header.forward = make([]*skipListNode, maxSkipListLevel)
 	sl.level = 0
 	sl.length = 0
