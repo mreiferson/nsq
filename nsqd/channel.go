@@ -1,10 +1,8 @@
 package nsqd
 
 import (
-	"container/heap"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,7 +12,6 @@ import (
 	"github.com/puzpuzpuz/xsync/v4"
 
 	"github.com/nsqio/nsq/internal/lg"
-	"github.com/nsqio/nsq/internal/pqueue"
 	"github.com/nsqio/nsq/internal/quantile"
 )
 
@@ -69,12 +66,10 @@ type Channel struct {
 	// Stats tracking
 	e2eProcessingLatencyStream *quantile.Quantile
 
-	// TODO: these can be DRYd up
-	deferredMessages map[MessageID]*pqueue.Item
-	deferredPQ       pqueue.PriorityQueue
-	deferredMutex    sync.Mutex
-	inFlightMessages *xsync.MapOf[MessageID, *Message] // lock-free concurrent map with better performance
-	inFlightPQ       *inFlightSkipList                 // lock-free skiplist for timeout ordering
+	deferredMessages *xsync.MapOf[MessageID, *Message] // lock-free concurrent map
+	deferredPQ       *msgSkipList                      // skiplist for deferred timeout ordering
+	inFlightMessages *xsync.MapOf[MessageID, *Message] // lock-free concurrent map
+	inFlightPQ       *msgSkipList                      // skiplist for in-flight timeout ordering
 }
 
 // NewChannel creates a new instance of the Channel type and returns a pointer
@@ -91,7 +86,7 @@ func NewChannel(topicName string, channelName string, nsqd *NSQD,
 		ephemeral:                strings.HasSuffix(channelName, "#ephemeral"),
 		topologyAwareConsumption: nsqd.getOpts().HasExperiment(TopologyAwareConsumption),
 		inFlightMessages:         xsync.NewMapOf[MessageID, *Message](),
-		inFlightPQ:               newInFlightSkipList(),
+		inFlightPQ:               newMsgSkipList(),
 	}
 
 	if nsqd.getOpts().TopologyRegion != "" {
@@ -141,16 +136,12 @@ func NewChannel(topicName string, channelName string, nsqd *NSQD,
 }
 
 func (c *Channel) initPQ() {
-	pqSize := int(math.Max(1, float64(c.nsqd.getOpts().MemQueueSize)/10))
-
-	// clear xsync.MapOf and skiplist by creating new ones
+	// clear xsync.MapOf and skiplists by creating new ones
 	c.inFlightMessages = xsync.NewMapOf[MessageID, *Message]()
-	c.inFlightPQ = newInFlightSkipList()
+	c.inFlightPQ = newMsgSkipList()
 
-	c.deferredMutex.Lock()
-	c.deferredMessages = make(map[MessageID]*pqueue.Item)
-	c.deferredPQ = pqueue.New(pqSize)
-	c.deferredMutex.Unlock()
+	c.deferredMessages = xsync.NewMapOf[MessageID, *Message]()
+	c.deferredPQ = newMsgSkipList()
 }
 
 // Exiting returns a boolean indicating if this channel is closed/exiting
@@ -231,9 +222,10 @@ finish:
 // it does not drain inflight/deferred because it is only called in Close()
 func (c *Channel) flush() error {
 	inFlightCount := c.inFlightMessages.Size()
-	if len(c.zoneLocalMsgChan) > 0 || len(c.regionLocalMsgChan) > 0 || len(c.memoryMsgChan) > 0 || inFlightCount > 0 || len(c.deferredMessages) > 0 {
+	deferredCount := c.deferredMessages.Size()
+	if len(c.zoneLocalMsgChan) > 0 || len(c.regionLocalMsgChan) > 0 || len(c.memoryMsgChan) > 0 || inFlightCount > 0 || deferredCount > 0 {
 		c.nsqd.logf(LOG_INFO, "CHANNEL(%s): flushing %d memory %d in-flight %d deferred messages to backend",
-			c.name, len(c.memoryMsgChan)+len(c.zoneLocalMsgChan)+len(c.regionLocalMsgChan), inFlightCount, len(c.deferredMessages))
+			c.name, len(c.memoryMsgChan)+len(c.zoneLocalMsgChan)+len(c.regionLocalMsgChan), inFlightCount, deferredCount)
 	}
 
 	for {
@@ -266,15 +258,13 @@ finish:
 		}
 	})
 
-	c.deferredMutex.Lock()
-	for _, item := range c.deferredMessages {
-		msg := item.Value.(*Message)
+	c.deferredMessages.Range(func(_ MessageID, msg *Message) bool {
 		err := writeMessageToBackend(msg, c.backend)
 		if err != nil {
 			c.nsqd.logf(LOG_ERROR, "failed to write message to backend - %s", err)
 		}
-	}
-	c.deferredMutex.Unlock()
+		return true
+	})
 
 	return nil
 }
@@ -520,13 +510,12 @@ func (c *Channel) StartInFlightTimeout(msg *Message, clientID int64, timeout tim
 }
 
 func (c *Channel) StartDeferredTimeout(msg *Message, timeout time.Duration) error {
-	absTs := time.Now().Add(timeout).UnixNano()
-	item := &pqueue.Item{Value: msg, Priority: absTs}
-	err := c.pushDeferredMessage(item)
+	msg.pri = time.Now().Add(timeout).UnixNano()
+	err := c.pushDeferredMessage(msg)
 	if err != nil {
 		return err
 	}
-	c.addToDeferredPQ(item)
+	c.addToDeferredPQ(msg)
 	return nil
 }
 
@@ -568,37 +557,25 @@ func (c *Channel) removeFromInFlightPQ(msg *Message) {
 	c.inFlightPQ.Remove(msg)
 }
 
-func (c *Channel) pushDeferredMessage(item *pqueue.Item) error {
-	c.deferredMutex.Lock()
-	// TODO: these map lookups are costly
-	id := item.Value.(*Message).ID
-	_, ok := c.deferredMessages[id]
-	if ok {
-		c.deferredMutex.Unlock()
+func (c *Channel) pushDeferredMessage(msg *Message) error {
+	_, loaded := c.deferredMessages.LoadOrStore(msg.ID, msg)
+	if loaded {
 		return errors.New("ID already deferred")
 	}
-	c.deferredMessages[id] = item
-	c.deferredMutex.Unlock()
 	return nil
 }
 
-func (c *Channel) popDeferredMessage(id MessageID) (*pqueue.Item, error) {
-	c.deferredMutex.Lock()
-	// TODO: these map lookups are costly
-	item, ok := c.deferredMessages[id]
+func (c *Channel) popDeferredMessage(id MessageID) (*Message, error) {
+	msg, ok := c.deferredMessages.Load(id)
 	if !ok {
-		c.deferredMutex.Unlock()
 		return nil, errors.New("ID not deferred")
 	}
-	delete(c.deferredMessages, id)
-	c.deferredMutex.Unlock()
-	return item, nil
+	c.deferredMessages.Delete(id)
+	return msg, nil
 }
 
-func (c *Channel) addToDeferredPQ(item *pqueue.Item) {
-	c.deferredMutex.Lock()
-	heap.Push(&c.deferredPQ, item)
-	c.deferredMutex.Unlock()
+func (c *Channel) addToDeferredPQ(msg *Message) {
+	c.deferredPQ.Insert(msg)
 }
 
 func (c *Channel) processDeferredQueue(t int64) bool {
@@ -611,16 +588,13 @@ func (c *Channel) processDeferredQueue(t int64) bool {
 
 	dirty := false
 	for {
-		c.deferredMutex.Lock()
-		item, _ := c.deferredPQ.PeekAndShift(t)
-		c.deferredMutex.Unlock()
+		msg, _ := c.deferredPQ.PeekAndShift(t)
 
-		if item == nil {
+		if msg == nil {
 			goto exit
 		}
 		dirty = true
 
-		msg := item.Value.(*Message)
 		_, err := c.popDeferredMessage(msg.ID)
 		if err != nil {
 			goto exit

@@ -222,10 +222,7 @@ func TestHTTPpubDefer(t *testing.T) {
 
 	time.Sleep(5 * time.Millisecond)
 
-	ch.deferredMutex.Lock()
-	numDef := len(ch.deferredMessages)
-	ch.deferredMutex.Unlock()
-	test.Equal(t, 1, numDef)
+	test.Equal(t, 1, ch.deferredMessages.Size())
 }
 
 func TestHTTPSRequire(t *testing.T) {

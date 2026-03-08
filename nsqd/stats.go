@@ -64,9 +64,7 @@ type ChannelStats struct {
 
 func NewChannelStats(c *Channel, clients []ClientStats, clientCount int) ChannelStats {
 	inflight := c.inFlightMessages.Size()
-	c.deferredMutex.Lock()
-	deferred := len(c.deferredMessages)
-	c.deferredMutex.Unlock()
+	deferred := c.deferredMessages.Size()
 
 	return ChannelStats{
 		ChannelName:         c.name,

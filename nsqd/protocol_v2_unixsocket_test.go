@@ -524,10 +524,7 @@ func TestUnixSocketDPUB(t *testing.T) {
 	time.Sleep(25 * time.Millisecond)
 
 	ch := nsqd.GetTopic(topicName).GetChannel("ch")
-	ch.deferredMutex.Lock()
-	numDef := len(ch.deferredMessages)
-	ch.deferredMutex.Unlock()
-	test.Equal(t, 1, numDef)
+	test.Equal(t, 1, ch.deferredMessages.Size())
 	test.Equal(t, 1, int(atomic.LoadUint64(&ch.messageCount)))
 
 	// duration out of range
@@ -1390,12 +1387,10 @@ func TestUnixSocketReqTimeoutRange(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	channel.deferredMutex.Lock()
-	pqItem := channel.deferredMessages[msg.ID]
-	channel.deferredMutex.Unlock()
+	deferredMsg, _ := channel.deferredMessages.Load(msg.ID)
 
-	test.NotNil(t, pqItem)
-	test.Equal(t, true, pqItem.Priority >= minTs)
+	test.NotNil(t, deferredMsg)
+	test.Equal(t, true, deferredMsg.pri >= minTs)
 }
 
 func TestUnixSocketIOLoopReturnsClientErrWhenSendFails(t *testing.T) {
