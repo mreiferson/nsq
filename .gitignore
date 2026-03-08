@@ -2,6 +2,7 @@
 dist/
 .cover/
 profile/
+.claude/
 
 # nsqd data from testing
 *.dat
